@@ -1,13 +1,19 @@
+import argparse
 import configparser
 import os.path
 import re
+import sys
+import time
 from datetime import datetime
-import tkinter as tk
-from tkinter import messagebox, ttk
 import requests
 import urllib3
 from bs4 import BeautifulSoup
 import random
+
+
+tk = None
+messagebox = None
+ttk = None
 
 
 class Course:
@@ -19,11 +25,102 @@ class Course:
 
 
 def on_combo_change(event):
-    className = combo_var.get()
-    for i in Course.class_list:
-        if i["CourseName"] == className:
-            Course.id = i["CourseID"]
-            Course.class_id = i["TClassID"]
+    select_course_by_index(combo.current())
+
+
+def is_gui_mode():
+    return app_mode == "gui"
+
+
+def show_info(title, message):
+    if is_gui_mode():
+        messagebox.showinfo(title, message)
+    else:
+        print(message)
+
+
+def show_warning(title, message):
+    if is_gui_mode():
+        messagebox.showwarning(title, message)
+    else:
+        print(f"[WARN] {message}")
+
+
+def show_error(title, message):
+    if is_gui_mode():
+        messagebox.showerror(title, message)
+    else:
+        print(f"[ERROR] {message}", file=sys.stderr)
+
+
+def clear_output():
+    global cli_status_active
+    if is_gui_mode():
+        text_box.delete("1.0", "end")
+    else:
+        if cli_status_active:
+            print()
+            cli_status_active = False
+
+
+def append_log(message, transient=False):
+    global cli_status_active
+    if is_gui_mode():
+        text_box.insert(tk.END, message)
+        text_box.see(tk.END)
+        return
+
+    if transient:
+        print(f"\r{message}", end="", flush=True)
+        cli_status_active = True
+        return
+
+    if cli_status_active:
+        print()
+        cli_status_active = False
+    print(message, end="", flush=True)
+
+
+def get_sign_seconds():
+    if is_gui_mode():
+        try:
+            return int(seconds_entry.get())
+        except ValueError:
+            return 10
+    return cli_seconds
+
+
+def select_course_by_index(index):
+    if index is None or index < 0 or index >= len(Course.class_list):
+        return False
+
+    selected_course = Course.class_list[index]
+    Course.id = selected_course["CourseID"]
+    Course.class_id = selected_course["TClassID"]
+    Course.check_list = []
+
+    if is_gui_mode():
+        combo.current(index)
+    return True
+
+
+def list_courses_for_cli():
+    print("课程列表：")
+    for index, course in enumerate(Course.class_list, start=1):
+        print(f"{index}. {course['CourseName']} (CourseID={course['CourseID']}, TClassID={course['TClassID']})")
+
+
+def prompt_course_index():
+    while True:
+        raw_value = input("请输入课程编号: ").strip()
+        if not raw_value.isdigit():
+            print("请输入有效的数字编号。")
+            continue
+
+        course_index = int(raw_value) - 1
+        if select_course_by_index(course_index):
+            return course_index
+        print("课程编号超出范围，请重新输入。")
 
 
 def save_cookie(_x):
@@ -34,37 +131,43 @@ def save_cookie(_x):
         config.write(f)
 
 
-def login_link():
-    link = link_entry.get()
+def login_link(link=None):
+    link = link if link is not None else link_entry.get()
     code = re.search(r"(?<=code=)\S{32}", link)
     if code is not None:
         x.cookies.clear()
         code = code[0]
         _r = x.get(url=host + f"/P.aspx?authtype=1&code={code}&state=1")
-        get_class_list()
-        save_cookie(_r)
+        if get_class_list():
+            save_cookie(_r)
+            return True
     else:
-        messagebox.showerror("error", "链接有误")
+        show_error("error", "链接有误")
+    return False
 
 
-def login():
+def login(login_name=None, login_password=None):
     headers = {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "Referer": "https://www.duifene.com/AppGate.aspx"
     }
-    params = f'action=loginmb&loginname={username.get()}&password={password.get()}'
+    login_name = login_name if login_name is not None else username.get()
+    login_password = login_password if login_password is not None else password.get()
+    params = f'action=loginmb&loginname={login_name}&password={login_password}'
     x.cookies.clear()
     x.get(host)
     _r = x.post(url=host + "/AppCode/LoginInfo.ashx", data=params, headers=headers)
     if _r.status_code == 200:
-        text_box.delete("1.0", "end")
+        clear_output()
         msg = _r.json()["msgbox"]
-        text_box.insert(tk.END, f"\n{msg}\n")
+        append_log(f"\n{msg}\n")
         if msg == "登录成功":
-            get_class_list()
-            save_cookie(_r)
+            if get_class_list():
+                save_cookie(_r)
+                return True
     else:
-        messagebox.showerror("错误提示", "登录失败")
+        show_error("错误提示", "登录失败")
+    return False
 
 
 def select_tab(event):
@@ -104,7 +207,7 @@ def sign(sign_code):
             url=host + "/_CheckIn/CheckIn.ashx", data=params, headers=headers)
         if _r.status_code == 200:
             msg = _r.json()["msgbox"]
-            text_box.insert(tk.END, f"\t{msg}\n\n")
+            append_log(f"\t{msg}\n\n")
             if msg == "签到成功！":
                 return True
     # 二维码
@@ -114,9 +217,9 @@ def sign(sign_code):
             soup = BeautifulSoup(_r.text, "lxml")
             msg = soup.find(id="DivOK").get_text()
             if "签到成功" in msg:
-                text_box.insert(tk.END, f"\t{msg}\n\n")
+                append_log(f"\t{msg}\n\n")
             else:
-                text_box.insert(tk.END, f"\t非微信链接登录，二维码无法签到\n\n")
+                append_log(f"\t非微信链接登录，二维码无法签到\n\n")
             return True
 
 
@@ -133,19 +236,27 @@ def sign_location(longitude, latitude):
         url=host + "/_CheckIn/CheckInRoomHandler.ashx", data=params, headers=headers)
     if _r.status_code == 200:
         msg = _r.json()["msgbox"]
-        text_box.insert(tk.END, f"\t{msg}\n\n")
+        append_log(f"\t{msg}\n\n")
         if msg == "签到成功！":
             return True
 
 
-def watching_sign():
-    is_login()
+def update_watch_status(current_time):
+    if is_gui_mode():
+        line_count = int(text_box.index('end-1c').split('.')[0])
+        text_box.delete(f"{line_count}.0", f"{line_count}.end")
+        text_box.insert(tk.END, f"持续监控：{current_time}")
+        text_box.see(tk.END)
+    else:
+        append_log(f"持续监控：{current_time}", transient=True)
 
-    line_count = int(text_box.index('end-1c').split('.')[0])
-    text_box.delete(f"{line_count}.0", f"{line_count}.end")
+
+def watching_sign_once():
+    if not is_login():
+        return
+
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    text_box.insert(tk.END, f"持续监控：{current_time}")  # 插入当前时间
-    text_box.see(tk.END)  # 滚动到最后一行
+    update_watch_status(current_time)
 
     _r = x.get(url=host + f"/_CheckIn/MB/TeachCheckIn.aspx?classid={Course.class_id}&temps=0&checktype=1&isrefresh=0"
                           f"&timeinterval=0&roomid=0&match=")
@@ -163,38 +274,42 @@ def watching_sign():
                     # 数字签到
                     if HFChecktype == '1':
                         sign_code = soup.find(id="HFCheckCodeKey").get("value")
-                        if sign_code is not None and int(HFSeconds) <= int(seconds_entry.get()):
-                            text_box.insert(tk.END, f"\n\n{current_time} 签到ID：{HFCheckInID} 开始签到\t签到码：{sign_code}")
+                        if sign_code is not None and int(HFSeconds) <= get_sign_seconds():
+                            append_log(f"\n\n{current_time} 签到ID：{HFCheckInID} 开始签到\t签到码：{sign_code}")
                             status = sign(sign_code)
                         else:
-                            text_box.insert(tk.END, f"\t签到码签到\t未到签到时间\t倒计时：{HFSeconds}秒\t签到码：{sign_code}")
+                            append_log(f"\t签到码签到\t未到签到时间\t倒计时：{HFSeconds}秒\t签到码：{sign_code}")
                     # 二维码签到
                     elif HFChecktype == '2':
-                        if HFCheckInID is not None and int(HFSeconds) <= int(seconds_entry.get()):
-                            text_box.insert(tk.END, f"\n\n{current_time} 签到ID：{HFCheckInID} 开始签到\t二维码签到")
+                        if HFCheckInID is not None and int(HFSeconds) <= get_sign_seconds():
+                            append_log(f"\n\n{current_time} 签到ID：{HFCheckInID} 开始签到\t二维码签到")
                             status = sign(HFCheckInID)
                         else:
-                            text_box.insert(tk.END, f"\t二维码签到\t未到签到时间\t倒计时：{HFSeconds}秒")
+                            append_log(f"\t二维码签到\t未到签到时间\t倒计时：{HFSeconds}秒")
                     # 定位签到
                     elif HFChecktype == '3':
                         HFRoomLongitude = soup.find(id="HFRoomLongitude").get("value")
                         HFRoomLatitude = soup.find(id="HFRoomLatitude").get("value")
-                        if HFRoomLongitude is not None and HFRoomLatitude is not None and int(HFSeconds) <= int(seconds_entry.get()):
-                            text_box.insert(tk.END, f"\n\n{current_time} 签到ID：{HFCheckInID} 开始签到\t定位签到")
+                        if HFRoomLongitude is not None and HFRoomLatitude is not None and int(HFSeconds) <= get_sign_seconds():
+                            append_log(f"\n\n{current_time} 签到ID：{HFCheckInID} 开始签到\t定位签到")
                             status = sign_location(HFRoomLongitude, HFRoomLatitude)
                         else:
-                            text_box.insert(tk.END, f"\t定位签到\t未到签到时间\t倒计时：{HFSeconds}秒")
+                            append_log(f"\t定位签到\t未到签到时间\t倒计时：{HFSeconds}秒")
                     if status:
                         Course.check_list.append(HFCheckInID)
             else:
-                text_box.insert(tk.END, f"\t 检测到非本班签到")
+                append_log(f"\t 检测到非本班签到")
+
+
+def watching_sign():
+    watching_sign_once()
     if Course.flag:
         root.after(1000, watching_sign)
 
 
-def go_sign():
-    if combo.get() is None or combo.get() == '':
-        messagebox.showerror("错误提示", "请先登录")
+def start_sign_monitor():
+    if not Course.id or Course.id == '0':
+        show_error("错误提示", "请先选择课程")
         return
     headers = {
         "Referer": "https://www.duifene.com/_UserCenter/MB/index.aspx"
@@ -202,11 +317,23 @@ def go_sign():
     _r = x.get(url=host + "/_UserCenter/MB/Module.aspx?data=" + Course.id, headers=headers)
     if _r.status_code == 200:
         if Course.id in _r.text:
-            text_box.delete("1.0", "end")
+            clear_output()
             soup = BeautifulSoup(_r.text, "lxml")
             CourseName = soup.find(id="CourseName").text
-            text_box.insert(tk.END, f"正在监听【{CourseName}】的签到活动\n\n")
-            watching_sign()
+            append_log(f"正在监听【{CourseName}】的签到活动\n\n")
+            if is_gui_mode():
+                watching_sign()
+            else:
+                while Course.flag:
+                    watching_sign_once()
+                    time.sleep(1)
+
+
+def go_sign():
+    if combo.get() is None or combo.get() == '':
+        show_error("错误提示", "请先登录")
+        return
+    start_sign_monitor()
 
 
 def get_class_list():
@@ -220,20 +347,27 @@ def get_class_list():
     if _r.status_code == 200:
         _json = _r.json()
         if _json is not None:
-            try:
+            if isinstance(_json, dict) and "msgbox" in _json:
                 msg = _json["msgbox"]
-                messagebox.showerror("", f"{msg} 请重新登录。")
+                show_error("", f"{msg} 请重新登录。")
                 x.cookies.clear()
-            except Exception as e:
-                messagebox.showinfo("提示", "登录成功")
+                return []
+
+            show_info("提示", "登录成功")
+            Course.class_list = _json
+            if not Course.class_list:
+                show_warning("提示", "未获取到课程列表")
+                return []
+
+            select_course_by_index(0)
+            if is_gui_mode():
                 class_name_list = []
-                for i in _json:
-                    class_name_list.append(i["CourseName"])
+                for index, course in enumerate(_json, start=1):
+                    class_name_list.append(f"{index}. {course['CourseName']}")
                 combo['values'] = tuple(class_name_list)
-                combo.set(class_name_list[0])
-                Course.id = _json[0]['CourseID']
-                Course.class_id = _json[0]["TClassID"]
-                Course.class_list = _json
+                combo.current(0)
+            return Course.class_list
+    return []
 
 
 def is_login():
@@ -246,7 +380,7 @@ def is_login():
         if _r.json()["msg"] == "1":
             return True
         else:
-            messagebox.showwarning("登录状态失效", "请重新登录账号")
+            show_warning("登录状态失效", "请重新登录账号")
             x.cookies.clear()
             Course.flag = False
             return False
@@ -275,8 +409,61 @@ def init():
                 pass
     except (requests.ConnectionError, requests.Timeout):
         # 如果请求失败，则没有互联网连接
-        messagebox.showwarning("网络状态", "未检测到互联网连接，请检查你的网络设置。")
-        root.destroy()
+        show_warning("网络状态", "未检测到互联网连接，请检查你的网络设置。")
+        if is_gui_mode():
+            root.destroy()
+        else:
+            raise SystemExit(1)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="堆分儿自动签到")
+    parser.add_argument("--cli", action="store_true", help="使用命令行模式运行")
+    parser.add_argument("--link", help="微信授权链接")
+    parser.add_argument("--username", help="账号密码登录的用户名")
+    parser.add_argument("--password", help="账号密码登录的密码")
+    parser.add_argument("--seconds", type=int, default=10, help="倒计时小于等于该秒数时自动签到")
+    parser.add_argument("--course-index", type=int, help="课程编号，从 1 开始")
+    return parser.parse_args()
+
+
+def run_cli(args):
+    global cli_seconds
+    cli_seconds = args.seconds
+
+    if args.link:
+        if not login_link(args.link):
+            raise SystemExit(1)
+    elif args.username and args.password:
+        if not login(args.username, args.password):
+            raise SystemExit(1)
+    elif not Course.class_list:
+        login_mode = input("选择登录方式 [1] 微信链接 [2] 账号密码: ").strip() or "1"
+        if login_mode == "1":
+            if not login_link(input("请输入微信授权链接: ").strip()):
+                raise SystemExit(1)
+        elif login_mode == "2":
+            login_name = input("请输入账号: ").strip()
+            login_password = input("请输入密码: ").strip()
+            if not login(login_name, login_password):
+                raise SystemExit(1)
+        else:
+            print("不支持的登录方式。", file=sys.stderr)
+            raise SystemExit(1)
+
+    if not Course.class_list:
+        print("未获取到课程列表，程序退出。", file=sys.stderr)
+        raise SystemExit(1)
+
+    list_courses_for_cli()
+    if args.course_index is not None:
+        if not select_course_by_index(args.course_index - 1):
+            print("课程编号超出范围。", file=sys.stderr)
+            raise SystemExit(1)
+    else:
+        prompt_course_index()
+
+    start_sign_monitor()
 
 
 if __name__ == '__main__':
@@ -290,66 +477,78 @@ if __name__ == '__main__':
     x.verify = False
     filename = 'duifenyi.ini'
     config = configparser.ConfigParser()
+    app_mode = "gui"
+    cli_seconds = 10
+    cli_status_active = False
 
-    # 创建UI
-    root = tk.Tk()
-    # 标题
-    root.title("2024.9.18")
-    # 禁用窗口的调整大小
-    root.resizable(False, False)
+    args = parse_args()
+    if args.cli:
+        app_mode = "cli"
+        init()
+        run_cli(args)
+    else:
+        import tkinter as tk
+        from tkinter import messagebox, ttk
 
-    # tab控制
-    tab_control = ttk.Notebook(root)
-    tab1 = ttk.Frame(tab_control)
-    tab2 = ttk.Frame(tab_control)
-    # 添加选项卡
-    tab_control.add(tab1, text="微信链接登录")
-    tab_control.add(tab2, text="账号密码登录")
-    # 当选项卡被选中时，调用select_tab函数
-    tab_control.bind("<<NotebookTabChanged>>", select_tab)
-    tab_control.pack(fill=tk.BOTH, side=tk.LEFT)
+        # 创建UI
+        root = tk.Tk()
+        # 标题
+        root.title("2024.9.18")
+        # 禁用窗口的调整大小
+        root.resizable(False, False)
 
-    # tab选项卡中的内容_链接登录
-    tab_frame1 = tk.Frame(tab_control)
-    tab_frame1.pack(side=tk.LEFT, fill=tk.BOTH, pady=(40, 0))
-    tk.Label(tab_frame1, text="支持二维码和签到码\n查看右侧说明进行登录", font=('宋体', 10)).pack(pady=5)
-    tk.Label(tab_frame1, text="登录链接", font=('宋体', 10)).pack(pady=5)
-    link_entry = tk.Entry(tab_frame1, font=('宋体', 12))
-    link_entry.pack(pady=5, padx=10)
-    tk.Button(tab_frame1, text="登录", command=login_link, font=('宋体', 14)).pack(pady=5)
+        # tab控制
+        tab_control = ttk.Notebook(root)
+        tab1 = ttk.Frame(tab_control)
+        tab2 = ttk.Frame(tab_control)
+        # 添加选项卡
+        tab_control.add(tab1, text="微信链接登录")
+        tab_control.add(tab2, text="账号密码登录")
+        # 当选项卡被选中时，调用select_tab函数
+        tab_control.bind("<<NotebookTabChanged>>", select_tab)
+        tab_control.pack(fill=tk.BOTH, side=tk.LEFT)
 
-    # tab选项卡中的内容_密码登录
-    tab_frame2 = tk.Frame(tab_control)
-    tk.Label(tab_frame2, text="不支持二维码签到", font=('宋体', 10)).pack(padx=5)
-    tk.Label(tab_frame2, text="账号", font=('宋体', 14)).pack(padx=10)
-    username = tk.Entry(tab_frame2, font=('宋体', 12))
-    username.pack(padx=10)
-    tk.Label(tab_frame2, text="密码", font=('宋体', 14)).pack(padx=10)
-    password = tk.Entry(tab_frame2, show="*", font=('宋体', 12))
-    password.pack(padx=10)
-    tk.Label(tab_frame2, text="剩余倒计时X秒后签到", font=('宋体', 10)).pack(pady=5)
-    seconds_entry = tk.Entry(tab_frame2, font=('宋体', 12), width=5)
-    seconds_entry.insert(0, "10")
-    seconds_entry.pack(pady=5)
-    tk.Button(tab_frame2, text="登录", command=login, font=('宋体', 14)).pack(pady=5)
+        # tab选项卡中的内容_链接登录
+        tab_frame1 = tk.Frame(tab_control)
+        tab_frame1.pack(side=tk.LEFT, fill=tk.BOTH, pady=(40, 0))
+        tk.Label(tab_frame1, text="支持二维码和签到码\n查看右侧说明进行登录", font=('宋体', 10)).pack(pady=5)
+        tk.Label(tab_frame1, text="登录链接", font=('宋体', 10)).pack(pady=5)
+        link_entry = tk.Entry(tab_frame1, font=('宋体', 12))
+        link_entry.pack(pady=5, padx=10)
+        tk.Button(tab_frame1, text="登录", command=login_link, font=('宋体', 14)).pack(pady=5)
 
-    # 右边frame_选择课程
-    frame_mid = tk.Frame(root)
-    frame_mid.pack(side=tk.TOP)
-    tk.Label(frame_mid, text="选择课程").pack(side=tk.TOP, fill=tk.BOTH, pady=(10, 0))
-    combo_var = tk.StringVar()
-    combo = ttk.Combobox(frame_mid, textvariable=combo_var, state="readonly")
-    combo.bind("<<ComboboxSelected>>", on_combo_change)
-    combo.pack(side=tk.LEFT)
-    btn = tk.Button(frame_mid, text="开始监听签到", command=go_sign)
-    btn.pack(side=tk.RIGHT, padx=10, pady=10)
+        # tab选项卡中的内容_密码登录
+        tab_frame2 = tk.Frame(tab_control)
+        tk.Label(tab_frame2, text="不支持二维码签到", font=('宋体', 10)).pack(padx=5)
+        tk.Label(tab_frame2, text="账号", font=('宋体', 14)).pack(padx=10)
+        username = tk.Entry(tab_frame2, font=('宋体', 12))
+        username.pack(padx=10)
+        tk.Label(tab_frame2, text="密码", font=('宋体', 14)).pack(padx=10)
+        password = tk.Entry(tab_frame2, show="*", font=('宋体', 12))
+        password.pack(padx=10)
+        tk.Label(tab_frame2, text="剩余倒计时X秒后签到", font=('宋体', 10)).pack(pady=5)
+        seconds_entry = tk.Entry(tab_frame2, font=('宋体', 12), width=5)
+        seconds_entry.insert(0, "10")
+        seconds_entry.pack(pady=5)
+        tk.Button(tab_frame2, text="登录", command=login, font=('宋体', 14)).pack(pady=5)
 
-    # 输出框
-    frame_right = tk.Frame(root)
-    frame_right.pack(side=tk.RIGHT)
-    text_box = tk.Text(frame_right, width=90, height=20, font=('宋体', 9))
-    text_box.pack(pady=(0, 10), padx=(0, 10))
+        # 右边frame_选择课程
+        frame_mid = tk.Frame(root)
+        frame_mid.pack(side=tk.TOP)
+        tk.Label(frame_mid, text="选择课程").pack(side=tk.TOP, fill=tk.BOTH, pady=(10, 0))
+        combo_var = tk.StringVar()
+        combo = ttk.Combobox(frame_mid, textvariable=combo_var, state="readonly")
+        combo.bind("<<ComboboxSelected>>", on_combo_change)
+        combo.pack(side=tk.LEFT)
+        btn = tk.Button(frame_mid, text="开始监听签到", command=go_sign)
+        btn.pack(side=tk.RIGHT, padx=10, pady=10)
 
-    # 初始化
-    init()
-    root.mainloop()
+        # 输出框
+        frame_right = tk.Frame(root)
+        frame_right.pack(side=tk.RIGHT)
+        text_box = tk.Text(frame_right, width=90, height=20, font=('宋体', 9))
+        text_box.pack(pady=(0, 10), padx=(0, 10))
+
+        # 初始化
+        init()
+        root.mainloop()
