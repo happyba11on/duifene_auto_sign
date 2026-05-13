@@ -267,8 +267,18 @@ def watching_sign_once():
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     update_watch_status(current_time)
 
-    _r = x.get(url=host + f"/_CheckIn/MB/TeachCheckIn.aspx?classid={Course.class_id}&temps=0&checktype=1&isrefresh=0"
-                          f"&timeinterval=0&roomid=0&match=", timeout=request_timeout)
+    try:
+        _r = x.get(url=host + f"/_CheckIn/MB/TeachCheckIn.aspx?classid={Course.class_id}&temps=0&checktype=1&isrefresh=0"
+                              f"&timeinterval=0&roomid=0&match=", timeout=request_timeout)
+    except requests.Timeout:
+        logger.warning("Polling sign status timed out; continuing monitor loop.")
+        append_log("	签到状态轮询超时，本次跳过")
+        return
+    except requests.RequestException as exc:
+        logger.warning("Polling sign status failed: %s", exc)
+        append_log("	签到状态轮询失败，本次跳过")
+        return
+
     if _r.status_code == 200:
         if "HFChecktype" in _r.text:
             status = False
