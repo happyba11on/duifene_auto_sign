@@ -198,31 +198,38 @@ def get_user_id():
 
 
 def sign(sign_code):
-    # 签到码
-    if len(sign_code) == 4:
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Referer": "https://www.duifene.com/_CheckIn/MB/CheckInStudent.aspx?moduleid=16&pasd="
-        }
-        params = f"action=studentcheckin&studentid={get_user_id()}&checkincode={sign_code}"
-        _r = x.post(
-            url=host + "/_CheckIn/CheckIn.ashx", data=params, headers=headers, timeout=request_timeout)
-        if _r.status_code == 200:
-            msg = _r.json()["msgbox"]
-            append_log(f"\t{msg}\n\n")
-            if msg == "签到成功！":
-                return True
-    # 二维码
-    else:
-        _r = x.get(url=host + "/_CheckIn/MB/QrCodeCheckOK.aspx?state=" + sign_code, timeout=request_timeout)
-        if _r.status_code == 200:
-            soup = BeautifulSoup(_r.text, "lxml")
-            msg = soup.find(id="DivOK").get_text()
-            if "签到成功" in msg:
+    try:
+        # 签到码
+        if len(sign_code) == 4:
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Referer": "https://www.duifene.com/_CheckIn/MB/CheckInStudent.aspx?moduleid=16&pasd="
+            }
+            params = f"action=studentcheckin&studentid={get_user_id()}&checkincode={sign_code}"
+            _r = x.post(
+                url=host + "/_CheckIn/CheckIn.ashx", data=params, headers=headers, timeout=request_timeout)
+            if _r.status_code == 200:
+                msg = _r.json()["msgbox"]
                 append_log(f"\t{msg}\n\n")
-            else:
-                append_log(f"\t非微信链接登录，二维码无法签到\n\n")
-            return True
+                if msg == "签到成功！":
+                    return True
+        # 二维码
+        else:
+            _r = x.get(url=host + "/_CheckIn/MB/QrCodeCheckOK.aspx?state=" + sign_code, timeout=request_timeout)
+            if _r.status_code == 200:
+                soup = BeautifulSoup(_r.text, "lxml")
+                msg = soup.find(id="DivOK").get_text()
+                if "签到成功" in msg:
+                    append_log(f"\t{msg}\n\n")
+                else:
+                    append_log(f"\t非微信链接登录，二维码无法签到\n\n")
+                return True
+    except requests.Timeout:
+        logger.warning("Sign request timed out; skipping this sign attempt.")
+        append_log("\t签到请求超时，本次跳过\n\n")
+    except requests.RequestException as exc:
+        logger.warning("Sign request failed: %s", exc)
+        append_log("\t签到请求失败，本次跳过\n\n")
 
 
 def sign_location(longitude, latitude):
@@ -261,7 +268,16 @@ def stop_monitor(reason, exit_code=1):
 
 
 def watching_sign_once():
-    if not is_login():
+    try:
+        if not is_login():
+            return
+    except requests.Timeout:
+        logger.warning("Login status check timed out; continuing monitor loop.")
+        append_log("	登录状态检测超时，本次跳过")
+        return
+    except requests.RequestException as exc:
+        logger.warning("Login status check failed: %s", exc)
+        append_log("	登录状态检测失败，本次跳过")
         return
 
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -394,14 +410,24 @@ def is_login():
         "Referer": "https://www.duifene.com/_UserCenter/PC/CenterStudent.aspx",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
     }
-    _r = x.get(host + "/AppCode/LoginInfo.ashx", data="Action=checklogin", headers=headers, timeout=request_timeout)
+    try:
+        _r = x.get(host + "/AppCode/LoginInfo.ashx", data="Action=checklogin", headers=headers, timeout=request_timeout)
+    except requests.Timeout:
+        logger.warning("Login status request timed out.")
+        raise
+    except requests.RequestException as exc:
+        logger.warning("Login status request failed: %s", exc)
+        raise
+
     if _r.status_code == 200:
         if _r.json()["msg"] == "1":
             return True
-        else:
-            x.cookies.clear()
-            stop_monitor("登录状态失效，请重新登录账号", exit_code=2)
-            return False
+        x.cookies.clear()
+        stop_monitor("登录状态失效，请重新登录账号", exit_code=2)
+        return False
+
+    logger.warning("Login status request returned unexpected status: %s", _r.status_code)
+    return True
 
 
 def init():
