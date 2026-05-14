@@ -1,5 +1,6 @@
 import argparse
 import configparser
+import logging
 import os.path
 import re
 import sys
@@ -14,6 +15,7 @@ import random
 tk = None
 messagebox = None
 ttk = None
+logger = logging.getLogger(__name__)
 
 
 class Course:
@@ -137,7 +139,7 @@ def login_link(link=None):
     if code is not None:
         x.cookies.clear()
         code = code[0]
-        _r = x.get(url=host + f"/P.aspx?authtype=1&code={code}&state=1")
+        _r = x.get(url=host + f"/P.aspx?authtype=1&code={code}&state=1", timeout=request_timeout)
         if get_class_list():
             save_cookie(_r)
             return True
@@ -155,8 +157,8 @@ def login(login_name=None, login_password=None):
     login_password = login_password if login_password is not None else password.get()
     params = f'action=loginmb&loginname={login_name}&password={login_password}'
     x.cookies.clear()
-    x.get(host)
-    _r = x.post(url=host + "/AppCode/LoginInfo.ashx", data=params, headers=headers)
+    x.get(host, timeout=request_timeout)
+    _r = x.post(url=host + "/AppCode/LoginInfo.ashx", data=params, headers=headers, timeout=request_timeout)
     if _r.status_code == 200:
         clear_output()
         msg = _r.json()["msgbox"]
@@ -188,7 +190,7 @@ def select_tab(event):
 
 
 def get_user_id():
-    _r = x.get(url=host + "/_UserCenter/MB/index.aspx")
+    _r = x.get(url=host + "/_UserCenter/MB/index.aspx", timeout=request_timeout)
     if _r.status_code == 200:
         soup = BeautifulSoup(_r.text, "lxml")
         stu_id = soup.find(id="hidUID").get("value")
@@ -196,31 +198,38 @@ def get_user_id():
 
 
 def sign(sign_code):
-    # 签到码
-    if len(sign_code) == 4:
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Referer": "https://www.duifene.com/_CheckIn/MB/CheckInStudent.aspx?moduleid=16&pasd="
-        }
-        params = f"action=studentcheckin&studentid={get_user_id()}&checkincode={sign_code}"
-        _r = x.post(
-            url=host + "/_CheckIn/CheckIn.ashx", data=params, headers=headers)
-        if _r.status_code == 200:
-            msg = _r.json()["msgbox"]
-            append_log(f"\t{msg}\n\n")
-            if msg == "签到成功！":
-                return True
-    # 二维码
-    else:
-        _r = x.get(url=host + "/_CheckIn/MB/QrCodeCheckOK.aspx?state=" + sign_code)
-        if _r.status_code == 200:
-            soup = BeautifulSoup(_r.text, "lxml")
-            msg = soup.find(id="DivOK").get_text()
-            if "签到成功" in msg:
+    try:
+        # 签到码
+        if len(sign_code) == 4:
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Referer": "https://www.duifene.com/_CheckIn/MB/CheckInStudent.aspx?moduleid=16&pasd="
+            }
+            params = f"action=studentcheckin&studentid={get_user_id()}&checkincode={sign_code}"
+            _r = x.post(
+                url=host + "/_CheckIn/CheckIn.ashx", data=params, headers=headers, timeout=request_timeout)
+            if _r.status_code == 200:
+                msg = _r.json()["msgbox"]
                 append_log(f"\t{msg}\n\n")
-            else:
-                append_log(f"\t非微信链接登录，二维码无法签到\n\n")
-            return True
+                if msg == "签到成功！":
+                    return True
+        # 二维码
+        else:
+            _r = x.get(url=host + "/_CheckIn/MB/QrCodeCheckOK.aspx?state=" + sign_code, timeout=request_timeout)
+            if _r.status_code == 200:
+                soup = BeautifulSoup(_r.text, "lxml")
+                msg = soup.find(id="DivOK").get_text()
+                if "签到成功" in msg:
+                    append_log(f"\t{msg}\n\n")
+                else:
+                    append_log(f"\t非微信链接登录，二维码无法签到\n\n")
+                return True
+    except requests.Timeout:
+        logger.warning("Sign request timed out; skipping this sign attempt.")
+        append_log("\t签到请求超时，本次跳过\n\n")
+    except requests.RequestException as exc:
+        logger.warning("Sign request failed: %s", exc)
+        append_log("\t签到请求失败，本次跳过\n\n")
 
 
 def sign_location(longitude, latitude):
@@ -233,7 +242,7 @@ def sign_location(longitude, latitude):
     }
     params = f"action=signin&sid={get_user_id()}&longitude={longitude}&latitude={latitude}"
     _r = x.post(
-        url=host + "/_CheckIn/CheckInRoomHandler.ashx", data=params, headers=headers)
+        url=host + "/_CheckIn/CheckInRoomHandler.ashx", data=params, headers=headers, timeout=request_timeout)
     if _r.status_code == 200:
         msg = _r.json()["msgbox"]
         append_log(f"\t{msg}\n\n")
@@ -251,15 +260,41 @@ def update_watch_status(current_time):
         append_log(f"持续监控：{current_time}", transient=True)
 
 
+def stop_monitor(reason, exit_code=1):
+    Course.flag = False
+    show_warning("监控已停止", reason)
+    if not is_gui_mode():
+        raise SystemExit(exit_code)
+
+
 def watching_sign_once():
-    if not is_login():
+    try:
+        if not is_login():
+            return
+    except requests.Timeout:
+        logger.warning("Login status check timed out; continuing monitor loop.")
+        append_log("	登录状态检测超时，本次跳过")
+        return
+    except requests.RequestException as exc:
+        logger.warning("Login status check failed: %s", exc)
+        append_log("	登录状态检测失败，本次跳过")
         return
 
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     update_watch_status(current_time)
 
-    _r = x.get(url=host + f"/_CheckIn/MB/TeachCheckIn.aspx?classid={Course.class_id}&temps=0&checktype=1&isrefresh=0"
-                          f"&timeinterval=0&roomid=0&match=")
+    try:
+        _r = x.get(url=host + f"/_CheckIn/MB/TeachCheckIn.aspx?classid={Course.class_id}&temps=0&checktype=1&isrefresh=0"
+                              f"&timeinterval=0&roomid=0&match=", timeout=request_timeout)
+    except requests.Timeout:
+        logger.warning("Polling sign status timed out; continuing monitor loop.")
+        append_log("	签到状态轮询超时，本次跳过")
+        return
+    except requests.RequestException as exc:
+        logger.warning("Polling sign status failed: %s", exc)
+        append_log("	签到状态轮询失败，本次跳过")
+        return
+
     if _r.status_code == 200:
         if "HFChecktype" in _r.text:
             status = False
@@ -314,7 +349,7 @@ def start_sign_monitor():
     headers = {
         "Referer": "https://www.duifene.com/_UserCenter/MB/index.aspx"
     }
-    _r = x.get(url=host + "/_UserCenter/MB/Module.aspx?data=" + Course.id, headers=headers)
+    _r = x.get(url=host + "/_UserCenter/MB/Module.aspx?data=" + Course.id, headers=headers, timeout=request_timeout)
     if _r.status_code == 200:
         if Course.id in _r.text:
             clear_output()
@@ -343,7 +378,7 @@ def get_class_list():
         "Referer": "https://www.duifene.com/_UserCenter/PC/CenterStudent.aspx"
     }
     params = "action=getstudentcourse&classtypeid=2"
-    _r = x.post(url=host + "/_UserCenter/CourseInfo.ashx", data=params, headers=headers)
+    _r = x.post(url=host + "/_UserCenter/CourseInfo.ashx", data=params, headers=headers, timeout=request_timeout)
     if _r.status_code == 200:
         _json = _r.json()
         if _json is not None:
@@ -375,15 +410,24 @@ def is_login():
         "Referer": "https://www.duifene.com/_UserCenter/PC/CenterStudent.aspx",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
     }
-    _r = x.get(host + "/AppCode/LoginInfo.ashx", data="Action=checklogin", headers=headers)
+    try:
+        _r = x.get(host + "/AppCode/LoginInfo.ashx", data="Action=checklogin", headers=headers, timeout=request_timeout)
+    except requests.Timeout:
+        logger.warning("Login status request timed out.")
+        raise
+    except requests.RequestException as exc:
+        logger.warning("Login status request failed: %s", exc)
+        raise
+
     if _r.status_code == 200:
         if _r.json()["msg"] == "1":
             return True
-        else:
-            show_warning("登录状态失效", "请重新登录账号")
-            x.cookies.clear()
-            Course.flag = False
-            return False
+        x.cookies.clear()
+        stop_monitor("登录状态失效，请重新登录账号", exit_code=2)
+        return False
+
+    logger.warning("Login status request returned unexpected status: %s", _r.status_code)
+    return True
 
 
 def init():
@@ -394,7 +438,7 @@ def init():
             }
             with open(filename, 'w') as configfile:
                 config.write(configfile)
-            x.get(host)
+            x.get(host, timeout=request_timeout)
         else:
             try:
                 config.read(filename)
@@ -406,7 +450,7 @@ def init():
                 x.cookies.update(cookies)
                 get_class_list()
             except Exception as e:
-                pass
+                logger.warning("加载本地配置失败，将继续以未登录状态运行: %s", e)
     except (requests.ConnectionError, requests.Timeout):
         # 如果请求失败，则没有互联网连接
         show_warning("网络状态", "未检测到互联网连接，请检查你的网络设置。")
@@ -480,6 +524,12 @@ if __name__ == '__main__':
     app_mode = "gui"
     cli_seconds = 10
     cli_status_active = False
+    request_timeout = 10
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
 
     args = parse_args()
     if args.cli:
