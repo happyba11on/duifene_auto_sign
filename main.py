@@ -16,6 +16,14 @@ tk = None
 messagebox = None
 ttk = None
 logger = logging.getLogger(__name__)
+WECHAT_LOGIN_URL = (
+    "https://open.weixin.qq.com/connect/oauth2/authorize?"
+    "appid=wx1b5650884f657981&"
+    "redirect_uri=https://www.duifene.com/_FileManage/PdfView.aspx?"
+    "file=https%3A%2F%2Ffs.duifene.com%2Fres%2Fr2%2Fu6106199%2F"
+    "%E5%AF%B9%E5%88%86%E6%98%93%E7%99%BB%E5%BD%95_876c9d439ca68ead389c.pdf&"
+    "response_type=code&scope=snsapi_userinfo&connect_redirect=1#wechat_redirect"
+)
 
 
 class Course:
@@ -125,6 +133,20 @@ def prompt_course_index():
         print("课程编号超出范围，请重新输入。")
 
 
+def get_wechat_login_instructions():
+    return (
+        "1、打开电脑端微信，复制如下链接到文件传输助手并发送\n\n"
+        f"【{WECHAT_LOGIN_URL}】\n\n"
+        "2、点击进入链接，点击微信浏览器窗口右上角三个点，点击复制链接，"
+        "并把微信链接粘贴到登录链接输入框。\n"
+    )
+
+
+def print_wechat_login_instructions_for_cli():
+    print("微信链接登录说明：")
+    print(get_wechat_login_instructions())
+
+
 def save_cookie(_x):
     config['INFO'] = {
         'cookie': _x.request.headers.get("cookie")
@@ -176,12 +198,7 @@ def select_tab(event):
     tab_id = tab_control.index(tab_control.select())
     text_box.delete("1.0", "end")
     if tab_id == 0:
-        text = '''
-        1、打开电脑端微信，复制如下链接到文件传输助手并发送\n
-        【https://open.weixin.qq.com/connect/oauth2/authorize?appid=wx1b5650884f657981&redirect_uri=https://www.duifene.com/_FileManage/PdfView.aspx?file=https%3A%2F%2Ffs.duifene.com%2Fres%2Fr2%2Fu6106199%2F%E5%AF%B9%E5%88%86%E6%98%93%E7%99%BB%E5%BD%95_876c9d439ca68ead389c.pdf&response_type=code&scope=snsapi_userinfo&connect_redirect=1#wechat_redirect】\n\n
-        2、点击进入链接，点击微信浏览器窗口右上角三个点，点击复制链接，并把微信链接粘贴到左侧输入框。\n
-        '''
-        text_box.insert(tk.END, text)
+        text_box.insert(tk.END, get_wechat_login_instructions())
         tab_frame2.pack_forget()
         tab_frame1.pack(side=tk.LEFT, fill=tk.BOTH, pady=(40, 0))
     elif tab_id == 1:
@@ -464,6 +481,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="堆分儿自动签到")
     parser.add_argument("--cli", action="store_true", help="使用命令行模式运行")
     parser.add_argument("--link", help="微信授权链接")
+    parser.add_argument("--print-login-url", action="store_true", help="输出生成微信授权链接所需的 URL 后退出")
     parser.add_argument("--username", help="账号密码登录的用户名")
     parser.add_argument("--password", help="账号密码登录的密码")
     parser.add_argument("--seconds", type=int, default=10, help="倒计时小于等于该秒数时自动签到")
@@ -484,6 +502,7 @@ def run_cli(args):
     elif not Course.class_list:
         login_mode = input("选择登录方式 [1] 微信链接 [2] 账号密码: ").strip() or "1"
         if login_mode == "1":
+            print_wechat_login_instructions_for_cli()
             if not login_link(input("请输入微信授权链接: ").strip()):
                 raise SystemExit(1)
         elif login_mode == "2":
@@ -532,6 +551,10 @@ if __name__ == '__main__':
     )
 
     args = parse_args()
+    if args.print_login_url:
+        print(WECHAT_LOGIN_URL)
+        raise SystemExit(0)
+
     if args.cli:
         app_mode = "cli"
         init()

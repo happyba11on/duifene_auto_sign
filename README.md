@@ -6,7 +6,7 @@ https://www.duifene.com/
 ![1715853160414](https://github.com/liuzhijie443/duifene_auto_sign/assets/25584923/12fce0f7-f0ac-4920-8315-b39efc1ec1ae)
 
 ```
-usage: main.py [-h] [--cli] [--link LINK] [--username USERNAME] [--password PASSWORD] [--seconds SECONDS] [--course-index COURSE_INDEX]
+usage: main.py [-h] [--cli] [--link LINK] [--print-login-url] [--username USERNAME] [--password PASSWORD] [--seconds SECONDS] [--course-index COURSE_INDEX]
 
 堆分儿自动签到
 
@@ -14,6 +14,7 @@ options:
   -h, --help            show this help message and exit
   --cli                 使用命令行模式运行
   --link LINK           微信授权链接
+  --print-login-url     输出生成微信授权链接所需的 URL 后退出
   --username USERNAME   账号密码登录的用户名
   --password PASSWORD   账号密码登录的密码
   --seconds SECONDS     倒计时小于等于该秒数时自动签到
