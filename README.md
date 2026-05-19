@@ -16,8 +16,9 @@ cd duifene_auto_sign
 ```
 
 
-### 2. 用 pip 安装依赖
-
+### 2. 依赖安装
+推荐python版本>=3.11
+#### pip
 ```bash
 pip install -r requirements.txt
 ```
@@ -28,8 +29,7 @@ pip install -r requirements.txt
 pip3 install -r requirements.txt
 ```
 
-### 3. 用 uv 安装依赖
-
+#### uv
 在项目目录执行：
 
 ```bash
