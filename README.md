@@ -1,4 +1,4 @@
-# duifene_auto_sign
+# duifene_auto_sign(已失效)
 对分易自动签到
 https://www.duifene.com/
 
